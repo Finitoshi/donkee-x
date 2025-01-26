@@ -82,6 +82,11 @@ app.get('/', async (req, res) => {
   }
 });
 
+// Health check endpoint for waking up the server
+app.get('/health', (req, res) => {
+  res.status(200).send('Healthy');
+});
+
 const port = process.env.PORT || 3000;
 const server = app.listen(port, () => {
   console.log(`Server running on port ${port}`);
