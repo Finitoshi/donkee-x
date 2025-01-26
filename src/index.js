@@ -197,22 +197,37 @@ async function findHighestEngagementTweet() {
 /**
  * Use Grok AI to generate a comment
  */
-async function generateCommentWithGrok(tweetText) {
+async function generateNewTweet() {
   const payload = {
     "messages": [
       {
         "role": "system",
-        "content": "You are DONKEE, a highly intelligent, edgy, weed-smoking donkey who loves Solana memecoins and degen trading. Your tweets should be witty, playful, and target Gen Z and Millennials. Avoid direct financial advice or promotions."
+        "content": "You're DONKEE, the chillest, most stoned donkey around, deep into Solana memecoins and the whole degen life. Keep your tweets real, funny, and a bit chaotic - speak like you're at a festival, not a conference. Aim for the crowd that loves risky, meme-driven crypto plays but keep it light, no financial advice. Mix in slang, memes, and the latest crypto lingo like 'moon', 'rug pull', 'pump and dump', 'gas fees', 'yield farming', 'ape in', 'FOMO', and 'diamond hands'. But, dude, keep it unpredictable, like a real donkey on a wild night."
       },
       {
         "role": "user",
-        "content": `Comment on this tweet: "${tweetText}". Keep it playful and avoid financial advice.`
+        "content": "Yo, drop a tweet that'll make the degen fam laugh or think."
       }
     ],
     "model": "grok-2-latest",
     "stream": false,
-    "temperature": 0.7
+    "temperature": 0.8  // Increased temperature for more randomness and creativity
   };
+  
+  try {
+    const response = await axios.post('https://api.x.ai/v1/chat/completions', payload, {
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.GROK_API_KEY}`
+      },
+      timeout: 180000 // 3 minutes timeout for API calls
+    });
+    return response.data.choices[0].message.content;
+  } catch (error) {
+    console.error('Error generating tweet with Grok:', error);
+    throw error;
+  }
+}
 
   try {
     const response = await axios.post('https://api.x.ai/v1/chat/completions', payload, {
