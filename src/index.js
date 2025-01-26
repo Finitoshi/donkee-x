@@ -1,4 +1,4 @@
-const express = required('express');
+const express = require('express');
 const axios = require('axios');
 const { TwitterApi } = require('twitter-api-v2');
 const rateLimit = require('express-rate-limit');
