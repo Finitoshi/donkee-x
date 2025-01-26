@@ -130,17 +130,47 @@ async function storeTweet(tweet) {
 }
 
 /**
- * Search for tweets and store them in MongoDB
+ * Search for tweets and store them in MongoDB, including from lists
  */
 async function searchAndStoreTweets() {
   try {
-    const tweets = await twitterClient.v2.search('#SolanaMemeCoins OR #SolanaNewCoin lang:en -is:retweet', { max_results: 10 });
-    for (const tweet of tweets.data) {
-      await storeTweet(tweet);
+    // Search using hashtags
+    const query = '#SolanaMemeCoins OR #100x OR #1000x OR #DegenTrading OR #DOGE #SOL lang:en -is:retweet';
+    const searchResult = await twitterClient.v2.search(query, { max_results: 100 });
+
+    if (searchResult.data && Array.isArray(searchResult.data)) {
+      for (const tweet of searchResult.data) {
+        await storeTweet(tweet);
+      }
+      console.log('Tweets from search query stored in MongoDB.');
+    } else {
+      console.log('No tweets found from search query');
     }
-    console.log('Tweets stored in MongoDB.');
+
+    // Fetch tweets from lists
+    const listIds = [
+      '1587987762908651520', '1726621096902807989', '1777037601578287430', 
+      '1747955009617006656', '1818599454951588008'
+    ];
+
+    for (const listId of listIds) {
+      try {
+        const listTweets = await twitterClient.v2.listTweets(listId, { max_results: 100 });
+
+        if (listTweets.data && Array.isArray(listTweets.data)) {
+          for (const tweet of listTweets.data) {
+            await storeTweet(tweet);
+          }
+          console.log(`Tweets from list ${listId} stored in MongoDB.`);
+        } else {
+          console.log(`No tweets found from list ${listId}`);
+        }
+      } catch (listError) {
+        console.error(`Error fetching tweets from list ${listId}:`, listError);
+      }
+    }
   } catch (error) {
-    console.error('Error searching for tweets:', error);
+    console.error('Error in searchAndStoreTweets:', error);
     throw error; // Propagate error for handling in the caller
   }
 }
@@ -153,16 +183,16 @@ async function generateNewTweet() {
     "messages": [
       {
         "role": "system",
-        "content": "You are DONKEE, a highly intelligent, edgy, weed-smoking donkey who loves Solana memecoins and degen trading. Your tweets should be witty, playful, and target Gen Z and Millennials. Avoid direct financial advice or promotions."
+        "content": "You're DONKEE, the chillest, most stoned donkey around, deep into Solana memecoins and the whole degen life. Keep your tweets real, funny, and a bit chaotic - speak like you're at a festival, not a conference. Aim for the crowd that loves risky, meme-driven crypto plays but keep it light, no financial advice. Mix in slang, memes, and the latest crypto lingo like 'moon', 'rug pull', 'pump and dump', 'gas fees', 'yield farming', 'ape in', 'FOMO', and 'diamond hands'. But, dude, keep it unpredictable, like a real donkey on a wild night."
       },
       {
         "role": "user",
-        "content": "Generate a tweet for me."
+        "content": "Yo, drop a tweet that'll make the degen fam laugh or think."
       }
     ],
     "model": "grok-2-latest",
     "stream": false,
-    "temperature": 0.7
+    "temperature": 0.8
   };
 
   try {
@@ -197,7 +227,7 @@ async function findHighestEngagementTweet() {
 /**
  * Use Grok AI to generate a comment
  */
-async function generateNewTweet() {
+async function generateCommentWithGrok(tweetText) {
   const payload = {
     "messages": [
       {
@@ -206,28 +236,13 @@ async function generateNewTweet() {
       },
       {
         "role": "user",
-        "content": "Yo, drop a tweet that'll make the degen fam laugh or think."
+        "content": `Comment on this tweet: "${tweetText}". Keep it playful and avoid financial advice.`
       }
     ],
     "model": "grok-2-latest",
     "stream": false,
-    "temperature": 0.8  // Increased temperature for more randomness and creativity
+    "temperature": 0.8
   };
-  
-  try {
-    const response = await axios.post('https://api.x.ai/v1/chat/completions', payload, {
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.GROK_API_KEY}`
-      },
-      timeout: 180000 // 3 minutes timeout for API calls
-    });
-    return response.data.choices[0].message.content;
-  } catch (error) {
-    console.error('Error generating tweet with Grok:', error);
-    throw error;
-  }
-}
 
   try {
     const response = await axios.post('https://api.x.ai/v1/chat/completions', payload, {
