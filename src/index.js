@@ -21,8 +21,8 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
-// MongoDB connection
-const url = 'mongodb://localhost:27017'; // Adjust for your MongoDB URL
+// MongoDB connection using environment variable
+const url = process.env.MONGODB_URL;
 const dbName = 'donkeeBot';
 let db;
 
@@ -33,22 +33,46 @@ MongoClient.connect(url, { useUnifiedTopology: true }, function(err, client) {
   } else {
     console.log('Connected successfully to MongoDB server');
     db = client.db(dbName);
+    setupTweetCollection();
   }
 });
 
+// Function to setup the collection with appropriate indexes
+function setupTweetCollection() {
+  const collection = db.collection('tweets');
+  
+  // Index for efficient querying by timestamp
+  collection.createIndex({ "timestamp": 1 }, { background: true });
+  
+  // Index for querying by hashtags
+  collection.createIndex({ "hashtags": 1 }, { background: true });
+  
+  // Index for engagement metrics if you frequently query by these
+  collection.createIndex({ "likes": -1, "retweets": -1 }, { background: true });
+}
+
 /**
- * Store tweets in MongoDB
+ * Store tweets in MongoDB with the new structure
  */
 async function storeTweet(tweet) {
   if (!db) return;
   const collection = db.collection('tweets');
-  await collection.insertOne({
+  
+  const tweetData = {
+    tweet_id: tweet.id,
     text: tweet.text,
-    id: tweet.id,
     likes: tweet.public_metrics.like_count,
     retweets: tweet.public_metrics.retweet_count,
-    created_at: new Date(tweet.created_at)
-  });
+    timestamp: new Date(tweet.created_at),
+    hashtags: tweet.entities && tweet.entities.hashtags ? tweet.entities.hashtags.map(h => h.tag) : []
+  };
+
+  try {
+    await collection.insertOne(tweetData);
+    console.log('Tweet stored in MongoDB:', tweet.id);
+  } catch (error) {
+    console.error('Error storing tweet:', error);
+  }
 }
 
 /**
@@ -72,11 +96,7 @@ async function searchAndStoreTweets() {
 async function findHighestEngagementTweet() {
   if (!db) return null;
   const collection = db.collection('tweets');
-  return collection.find({})
-    .sort({ likes: -1, retweets: -1 })
-    .limit(1)
-    .toArray()
-    .then(tweets => tweets[0]);
+  return collection.findOne({}, { sort: { likes: -1, retweets: -1 } });
 }
 
 /**
@@ -125,7 +145,7 @@ async function generateAndPostComment() {
 
     // Post the reply
     try {
-      await twitterClient.v2.reply(comment, tweet.id);
+      await twitterClient.v2.reply(comment, tweet.tweet_id);
       console.log('Reply sent successfully!');
     } catch (error) {
       console.error('Error posting reply:', error);
