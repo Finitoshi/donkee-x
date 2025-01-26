@@ -27,35 +27,79 @@ const dbName = 'donkeeBot';
 let db;
 
 // Connect to MongoDB
-MongoClient.connect(url, { useUnifiedTopology: true }, function(err, client) {
-  if(err) {
-    console.log('Error connecting to MongoDB:', err);
+MongoClient.connect(url, { useUnifiedTopology: true }, async function(err, client) {
+  if (err) {
+    console.error('Error connecting to MongoDB:', err);
+    process.exit(1); // Exit the process if MongoDB connection fails
   } else {
     console.log('Connected successfully to MongoDB server');
     db = client.db(dbName);
-    setupTweetCollection();
+    try {
+      await setupTweetCollection();
+      await addSchemaValidation();
+    } catch (setupError) {
+      console.error('Error setting up MongoDB:', setupError);
+      process.exit(1); // Exit if setup fails
+    }
   }
 });
 
 // Function to setup the collection with appropriate indexes
-function setupTweetCollection() {
+async function setupTweetCollection() {
+  if (!db) return;
   const collection = db.collection('tweets');
   
-  // Index for efficient querying by timestamp
-  collection.createIndex({ "timestamp": 1 }, { background: true });
+  try {
+    await collection.createIndex({ "timestamp": 1 }, { background: true });
+    await collection.createIndex({ "hashtags": 1 }, { background: true });
+    await collection.createIndex({ "likes": -1, "retweets": -1 }, { background: true });
+  } catch (error) {
+    console.error('Error creating indexes:', error);
+    throw error; // Propagate error for handling in the caller
+  }
+}
+
+// Add schema validation to the tweets collection
+async function addSchemaValidation() {
+  if (!db) return;
+  const collection = db.collection('tweets');
   
-  // Index for querying by hashtags
-  collection.createIndex({ "hashtags": 1 }, { background: true });
-  
-  // Index for engagement metrics if you frequently query by these
-  collection.createIndex({ "likes": -1, "retweets": -1 }, { background: true });
+  const validationRules = {
+    validator: {
+      $jsonSchema: {
+        bsonType: "object",
+        required: ["tweet_id", "text", "likes", "retweets", "timestamp"],
+        properties: {
+          tweet_id: { bsonType: "string" },
+          text: { bsonType: "string" },
+          likes: { bsonType: "int" },
+          retweets: { bsonType: "int" },
+          timestamp: { bsonType: "date" },
+          hashtags: {
+            bsonType: "array",
+            items: { bsonType: "string" }
+          }
+        }
+      }
+    },
+    validationLevel: "strict",
+    validationAction: "error"
+  };
+
+  try {
+    await db.command({ collMod: "tweets", ...validationRules });
+    console.log('Validation rules applied to the tweets collection.');
+  } catch (error) {
+    console.error('Error applying validation rules:', error);
+    throw error; // Propagate error for handling in the caller
+  }
 }
 
 /**
  * Store tweets in MongoDB with the new structure
  */
 async function storeTweet(tweet) {
-  if (!db) return;
+  if (!db) return Promise.reject(new Error('MongoDB not connected'));
   const collection = db.collection('tweets');
   
   const tweetData = {
@@ -72,6 +116,7 @@ async function storeTweet(tweet) {
     console.log('Tweet stored in MongoDB:', tweet.id);
   } catch (error) {
     console.error('Error storing tweet:', error);
+    throw error; // Propagate error for handling in the caller
   }
 }
 
@@ -87,6 +132,42 @@ async function searchAndStoreTweets() {
     console.log('Tweets stored in MongoDB.');
   } catch (error) {
     console.error('Error searching for tweets:', error);
+    throw error; // Propagate error for handling in the caller
+  }
+}
+
+/**
+ * Generate a new tweet using Grok AI
+ */
+async function generateNewTweet() {
+  const payload = {
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are DONKEE, a highly intelligent, edgy, weed-smoking donkey who loves Solana memecoins and degen trading. Your tweets should be witty, playful, and target Gen Z and Millennials. Avoid direct financial advice or promotions."
+      },
+      {
+        "role": "user",
+        "content": "Generate a tweet for me."
+      }
+    ],
+    "model": "grok-2-latest",
+    "stream": false,
+    "temperature": 0.7
+  };
+
+  try {
+    const response = await axios.post('https://api.x.ai/v1/chat/completions', payload, {
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.GROK_API_KEY}`
+      },
+      timeout: 180000 // 3 minutes timeout for API calls
+    });
+    return response.data.choices[0].message.content;
+  } catch (error) {
+    console.error('Error generating tweet with Grok:', error);
+    throw error;
   }
 }
 
@@ -96,7 +177,12 @@ async function searchAndStoreTweets() {
 async function findHighestEngagementTweet() {
   if (!db) return null;
   const collection = db.collection('tweets');
-  return collection.findOne({}, { sort: { likes: -1, retweets: -1 } });
+  try {
+    return await collection.findOne({}, { sort: { likes: -1, retweets: -1 } });
+  } catch (error) {
+    console.error('Error finding highest engagement tweet:', error);
+    throw error; // Propagate error for handling in the caller
+  }
 }
 
 /**
@@ -130,7 +216,7 @@ async function generateCommentWithGrok(tweetText) {
     return response.data.choices[0].message.content;
   } catch (error) {
     console.error('Error generating comment with Grok:', error);
-    return "Oops, Donkee's too high to comment right now!";
+    throw error; // Propagate error for handling in the caller
   }
 }
 
@@ -138,50 +224,74 @@ async function generateCommentWithGrok(tweetText) {
  * Generate and post comment on the best tweet from the last 8 hours
  */
 async function generateAndPostComment() {
-  const tweet = await findHighestEngagementTweet();
-  if (tweet) {
-    const comment = await generateCommentWithGrok(tweet.text);
-    console.log('Generated Comment:', comment);
+  try {
+    const tweet = await findHighestEngagementTweet();
+    if (tweet) {
+      const comment = await generateCommentWithGrok(tweet.text);
+      console.log('Generated Comment:', comment);
 
-    // Post the reply
-    try {
+      // Post the reply
       await twitterClient.v2.reply(comment, tweet.tweet_id);
       console.log('Reply sent successfully!');
-    } catch (error) {
-      console.error('Error posting reply:', error);
+    } else {
+      console.log('No tweet found to comment on.');
     }
-  } else {
-    console.log('No tweet found to comment on.');
+  } catch (error) {
+    console.error('Error in comment generation or posting:', error);
+    throw error; // Propagate error for handling in the caller
   }
 }
 
-// Endpoint to trigger the bot with API key validation
-app.get('/', async (req, res) => {
+// Endpoint for health check
+app.get('/health', (req, res) => {
+  res.status(200).send('Healthy');
+});
+
+// Endpoint for searching and storing tweets
+app.get('/search', async (req, res) => {
   if (req.headers['x-api-key'] !== process.env.DONKEE_SECRET_KEY) {
     return res.status(401).send('Unauthorized');
   }
   
   try {
-    const now = new Date();
-    const minutes = now.getMinutes();
-    const hours = now.getHours();
-
-    if (minutes === 0 && hours % 2 === 0) { // Store tweets every 2 hours
-      await searchAndStoreTweets();
-    } else if (minutes === 0 && hours % 8 === 0) { // Comment every 8 hours
-      await generateAndPostComment();
-    }
-
-    res.status(200).send('OK');
+    await searchAndStoreTweets();
+    res.status(200).send('Tweets searched and stored');
   } catch (error) {
-    console.error('Cron job failed:', error);
-    res.status(500).send('Error');
+    console.error('Search and store operation failed:', error);
+    res.status(500).send('Error in search and store operation');
   }
 });
 
-// Health check endpoint for waking up the server
-app.get('/health', (req, res) => {
-  res.status(200).send('Healthy');
+// Endpoint for posting a new tweet
+app.get('/tweet', async (req, res) => {
+  if (req.headers['x-api-key'] !== process.env.DONKEE_SECRET_KEY) {
+    return res.status(401).send('Unauthorized');
+  }
+  
+  try {
+    const newTweetText = await generateNewTweet();
+    await twitterClient.v2.tweet(newTweetText + " #ForEntertainmentOnly #NotFinancialAdvice");
+    console.log('New tweet posted:', newTweetText);
+    res.status(200).send('New tweet posted');
+  } catch (error) {
+    console.error('Tweet posting failed:', error);
+    res.status(500).send('Error posting tweet');
+  }
+});
+
+// Endpoint for replying to the best tweet
+app.get('/reply', async (req, res) => {
+  if (req.headers['x-api-key'] !== process.env.DONKEE_SECRET_KEY) {
+    return res.status(401).send('Unauthorized');
+  }
+  
+  try {
+    await generateAndPostComment();
+    res.status(200).send('Comment posted');
+  } catch (error) {
+    console.error('Reply posting failed:', error);
+    res.status(500).send('Error posting reply');
+  }
 });
 
 const port = process.env.PORT || 3000;
