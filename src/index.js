@@ -64,7 +64,7 @@ async function setupTweetCollection() {
     await collection.createIndex({ "likes": -1, "retweets": -1 }, { background: true });
   } catch (error) {
     console.error('Error creating indexes:', error);
-    throw error; // Propagate error for handling in the caller
+    throw error;
   }
 }
 
@@ -100,7 +100,7 @@ async function addSchemaValidation() {
     console.log('Validation rules applied to the tweets collection.');
   } catch (error) {
     console.error('Error applying validation rules:', error);
-    throw error; // Propagate error for handling in the caller
+    throw error;
   }
 }
 
@@ -125,7 +125,7 @@ async function storeTweet(tweet) {
     console.log('Tweet stored in MongoDB:', tweet.id);
   } catch (error) {
     console.error('Error storing tweet:', error);
-    throw error; // Propagate error for handling in the caller
+    throw error;
   }
 }
 
@@ -134,7 +134,6 @@ async function storeTweet(tweet) {
  */
 async function searchAndStoreTweets() {
   try {
-    // Search using a more generic query
     const query = '#sol OR #solana OR #memecoins OR #memes OR #crypto OR #100x lang:en -is:retweet';
     const searchResult = await twitterClient.v2.search(query, { max_results: 100 });
 
@@ -152,33 +151,46 @@ async function searchAndStoreTweets() {
       '1587987762908651520', '1726621096902807989', '1777037601578287430', 
       '1747955009617006656', '1818599454951588008'
     ];
+    const maxRetries = 5;
 
-    for (let i = 0; i < listIds.length; i++) {
-      try {
-        const listTweets = await twitterClient.v2.listTweets(listIds[i], { max_results: 100 });
+    for (let listId of listIds) {
+      let retryCount = 0;
+      while (retryCount < maxRetries) {
+        try {
+          const listTweets = await twitterClient.v2.listTweets(listId, { max_results: 100 });
 
-        if (listTweets.data && Array.isArray(listTweets.data)) {
-          for (const tweet of listTweets.data) {
-            await storeTweet(tweet);
+          if (listTweets.data && Array.isArray(listTweets.data)) {
+            for (const tweet of listTweets.data) {
+              await storeTweet(tweet);
+            }
+            console.log(`Tweets from list ${listId} stored in MongoDB.`);
+            break; // Success, move to next list
+          } else {
+            console.log(`No tweets found from list ${listId}`);
+            break; // No need to retry if no data, but no error either
           }
-          console.log(`Tweets from list ${listIds[i]} stored in MongoDB.`);
-        } else {
-          console.log(`No tweets found from list ${listIds[i]}`);
+        } catch (listError) {
+          console.error(`Error fetching tweets from list ${listId}:`, listError);
+          if (listError.code === 429) {
+            const resetTime = listError.rateLimit.reset * 1000; // Convert to milliseconds
+            const waitTime = Math.max(0, resetTime - Date.now());
+            console.log(`Rate limit reached. Waiting ${waitTime}ms before next attempt.`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+            retryCount++;
+          } else {
+            // For other errors, stop retrying for this list
+            console.error(`Non-rate limit error from list ${listId}. Moving to next list.`);
+            break;
+          }
         }
-      } catch (listError) {
-        console.error(`Error fetching tweets from list ${listIds[i]}:`, listError);
-        if (listError.code === 429) {
-          const resetTime = listError.rateLimit.reset * 1000; // Convert to milliseconds
-          const waitTime = Math.max(0, resetTime - Date.now());
-          console.log(`Rate limit reached. Waiting ${waitTime}ms before next request.`);
-          await new Promise(resolve => setTimeout(resolve, waitTime));
-          i--; // Decrement i to retry this list after the wait
-        }
+      }
+      if (retryCount >= maxRetries) {
+        console.error(`Max retries reached for list ${listId}. Moving to next list.`);
       }
     }
   } catch (error) {
     console.error('Error in searchAndStoreTweets:', error);
-    throw error; // Propagate error for handling in the caller
+    throw error;
   }
 }
 
@@ -227,7 +239,7 @@ async function findHighestEngagementTweet() {
     return await collection.findOne({}, { sort: { likes: -1, retweets: -1 } });
   } catch (error) {
     console.error('Error finding highest engagement tweet:', error);
-    throw error; // Propagate error for handling in the caller
+    throw error;
   }
 }
 
@@ -262,7 +274,7 @@ async function generateCommentWithGrok(tweetText) {
     return response.data.choices[0].message.content;
   } catch (error) {
     console.error('Error generating comment with Grok:', error);
-    throw error; // Propagate error for handling in the caller
+    throw error;
   }
 }
 
@@ -284,7 +296,7 @@ async function generateAndPostComment() {
     }
   } catch (error) {
     console.error('Error in comment generation or posting:', error);
-    throw error; // Propagate error for handling in the caller
+    throw error;
   }
 }
 
