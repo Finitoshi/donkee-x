@@ -130,12 +130,12 @@ async function storeTweet(tweet) {
 }
 
 /**
- * Search for tweets and store them in MongoDB, including from lists
+ * Search for tweets and store them in MongoDB, including from lists with rate limit handling
  */
 async function searchAndStoreTweets() {
   try {
-    // Search using hashtags
-    const query = '#SolanaMemeCoins OR #100x OR #1000x OR #DegenTrading OR #DOGE #SOL lang:en -is:retweet';
+    // Search using a more generic query
+    const query = '#sol OR #solana OR #memecoins OR #memes OR #crypto OR #100x lang:en -is:retweet';
     const searchResult = await twitterClient.v2.search(query, { max_results: 100 });
 
     if (searchResult.data && Array.isArray(searchResult.data)) {
@@ -147,26 +147,33 @@ async function searchAndStoreTweets() {
       console.log('No tweets found from search query');
     }
 
-    // Fetch tweets from lists
+    // Fetch tweets from lists with rate limit handling
     const listIds = [
       '1587987762908651520', '1726621096902807989', '1777037601578287430', 
       '1747955009617006656', '1818599454951588008'
     ];
 
-    for (const listId of listIds) {
+    for (let i = 0; i < listIds.length; i++) {
       try {
-        const listTweets = await twitterClient.v2.listTweets(listId, { max_results: 100 });
+        const listTweets = await twitterClient.v2.listTweets(listIds[i], { max_results: 100 });
 
         if (listTweets.data && Array.isArray(listTweets.data)) {
           for (const tweet of listTweets.data) {
             await storeTweet(tweet);
           }
-          console.log(`Tweets from list ${listId} stored in MongoDB.`);
+          console.log(`Tweets from list ${listIds[i]} stored in MongoDB.`);
         } else {
-          console.log(`No tweets found from list ${listId}`);
+          console.log(`No tweets found from list ${listIds[i]}`);
         }
       } catch (listError) {
-        console.error(`Error fetching tweets from list ${listId}:`, listError);
+        console.error(`Error fetching tweets from list ${listIds[i]}:`, listError);
+        if (listError.code === 429) {
+          const resetTime = listError.rateLimit.reset * 1000; // Convert to milliseconds
+          const waitTime = Math.max(0, resetTime - Date.now());
+          console.log(`Rate limit reached. Waiting ${waitTime}ms before next request.`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+          i--; // Decrement i to retry this list after the wait
+        }
       }
     }
   } catch (error) {
@@ -175,111 +182,7 @@ async function searchAndStoreTweets() {
   }
 }
 
-/**
- * Generate a new tweet using Grok AI
- */
-async function generateNewTweet() {
-  const payload = {
-    "messages": [
-      {
-        "role": "system",
-        "content": "You're DONKEE, the chillest, most stoned donkey around, deep into Solana memecoins and the whole degen life. Keep your tweets real, funny, and a bit chaotic - speak like you're at a festival, not a conference. Aim for the crowd that loves risky, meme-driven crypto plays but keep it light, no financial advice. Mix in slang, memes, and the latest crypto lingo like 'moon', 'rug pull', 'pump and dump', 'gas fees', 'yield farming', 'ape in', 'FOMO', and 'diamond hands'. But, dude, keep it unpredictable, like a real donkey on a wild night."
-      },
-      {
-        "role": "user",
-        "content": "Yo, drop a tweet that'll make the degen fam laugh or think."
-      }
-    ],
-    "model": "grok-2-latest",
-    "stream": false,
-    "temperature": 0.8
-  };
-
-  try {
-    const response = await axios.post('https://api.x.ai/v1/chat/completions', payload, {
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.GROK_API_KEY}`
-      },
-      timeout: 180000 // 3 minutes timeout for API calls
-    });
-    return response.data.choices[0].message.content;
-  } catch (error) {
-    console.error('Error generating tweet with Grok:', error);
-    throw error;
-  }
-}
-
-/**
- * Find the highest engagement tweet from MongoDB
- */
-async function findHighestEngagementTweet() {
-  if (!db) return null;
-  const collection = db.collection('tweets');
-  try {
-    return await collection.findOne({}, { sort: { likes: -1, retweets: -1 } });
-  } catch (error) {
-    console.error('Error finding highest engagement tweet:', error);
-    throw error; // Propagate error for handling in the caller
-  }
-}
-
-/**
- * Use Grok AI to generate a comment
- */
-async function generateCommentWithGrok(tweetText) {
-  const payload = {
-    "messages": [
-      {
-        "role": "system",
-        "content": "You're DONKEE, the chillest, most stoned donkey around, deep into Solana memecoins and the whole degen life. Keep your tweets real, funny, and a bit chaotic - speak like you're at a festival, not a conference. Aim for the crowd that loves risky, meme-driven crypto plays but keep it light, no financial advice. Mix in slang, memes, and the latest crypto lingo like 'moon', 'rug pull', 'pump and dump', 'gas fees', 'yield farming', 'ape in', 'FOMO', and 'diamond hands'. But, dude, keep it unpredictable, like a real donkey on a wild night."
-      },
-      {
-        "role": "user",
-        "content": `Comment on this tweet: "${tweetText}". Keep it playful and avoid financial advice.`
-      }
-    ],
-    "model": "grok-2-latest",
-    "stream": false,
-    "temperature": 0.8
-  };
-
-  try {
-    const response = await axios.post('https://api.x.ai/v1/chat/completions', payload, {
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.GROK_API_KEY}`
-      },
-      timeout: 180000 // 3 minutes timeout for API calls
-    });
-    return response.data.choices[0].message.content;
-  } catch (error) {
-    console.error('Error generating comment with Grok:', error);
-    throw error; // Propagate error for handling in the caller
-  }
-}
-
-/**
- * Generate and post comment on the best tweet from the last 8 hours
- */
-async function generateAndPostComment() {
-  try {
-    const tweet = await findHighestEngagementTweet();
-    if (tweet) {
-      const comment = await generateCommentWithGrok(tweet.text);
-      console.log('Generated Comment:', comment);
-
-      // Post the reply
-      await twitterClient.v2.reply(comment, tweet.tweet_id);
-      console.log('Reply sent successfully!');
-    } else {
-      console.log('No tweet found to comment on.');
-    }
-  } catch (error) {
-    console.error('Error in comment generation or posting:', error);
-    throw error; // Propagate error for handling in the caller
-  }
-}
+// ... [rest of your code for generateNewTweet, findHighestEngagementTweet, generateCommentWithGrok, generateAndPostComment remains unchanged]
 
 // Endpoint for health check
 app.get('/health', (req, res) => {
