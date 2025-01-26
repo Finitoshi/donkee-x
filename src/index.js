@@ -1,4 +1,4 @@
-const express = require('express');
+const express = required('express');
 const axios = require('axios');
 const { TwitterApi } = require('twitter-api-v2');
 const rateLimit = require('express-rate-limit');
@@ -20,6 +20,15 @@ const limiter = rateLimit({
   message: "Too many requests from this IP, please try again later."
 });
 app.use(limiter);
+
+// Check for required environment variables
+const requiredEnvVars = ['APP_KEY', 'APP_SECRET', 'ACCESS_TOKEN', 'ACCESS_SECRET', 'GROK_API_KEY', 'MONGODB_URL', 'DONKEE_SECRET_KEY'];
+requiredEnvVars.forEach(envVar => {
+  if (!process.env[envVar]) {
+    console.error(`Missing environment variable: ${envVar}`);
+    process.exit(1);
+  }
+});
 
 // MongoDB connection using environment variable
 const url = process.env.MONGODB_URL;
