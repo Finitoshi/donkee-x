@@ -2,7 +2,7 @@ const express = require('express');
 const axios = require('axios');
 const { TwitterApi } = require('twitter-api-v2');
 const rateLimit = require('express-rate-limit');
-const fs = require('fs');
+const { MongoClient } = require('mongodb');
 const app = express();
 
 // Initialize Twitter client using environment variables for security
@@ -21,29 +21,85 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
-/**
- * Generates content using Grok AI and sends a tweet
- */
-async function generateContentAndTweet() {
-  try {
-    // Prepare the prompt for Grok
-    const payload = {
-      "messages": [
-        {
-          "role": "system",
-          "content": "You are DONKEE, a highly intelligent, edgy, weed-smoking donkey who loves Solana memecoins and degen trading. Your tweets should be witty, playful, and target Gen Z and Millennials. Avoid direct financial advice or promotions."
-        },
-        {
-          "role": "user",
-          "content": "Generate a tweet for me."
-        }
-      ],
-      "model": "grok-2-latest",
-      "stream": false,
-      "temperature": 0.7
-    };
+// MongoDB connection
+const url = 'mongodb://localhost:27017'; // Adjust for your MongoDB URL
+const dbName = 'donkeeBot';
+let db;
 
-    // API call to Grok for text generation with increased timeout
+// Connect to MongoDB
+MongoClient.connect(url, { useUnifiedTopology: true }, function(err, client) {
+  if(err) {
+    console.log('Error connecting to MongoDB:', err);
+  } else {
+    console.log('Connected successfully to MongoDB server');
+    db = client.db(dbName);
+  }
+});
+
+/**
+ * Store tweets in MongoDB
+ */
+async function storeTweet(tweet) {
+  if (!db) return;
+  const collection = db.collection('tweets');
+  await collection.insertOne({
+    text: tweet.text,
+    id: tweet.id,
+    likes: tweet.public_metrics.like_count,
+    retweets: tweet.public_metrics.retweet_count,
+    created_at: new Date(tweet.created_at)
+  });
+}
+
+/**
+ * Search for tweets and store them in MongoDB
+ */
+async function searchAndStoreTweets() {
+  try {
+    const tweets = await twitterClient.v2.search('#SolanaMemeCoins OR #SolanaNewCoin lang:en -is:retweet', { max_results: 10 });
+    for (const tweet of tweets.data) {
+      await storeTweet(tweet);
+    }
+    console.log('Tweets stored in MongoDB.');
+  } catch (error) {
+    console.error('Error searching for tweets:', error);
+  }
+}
+
+/**
+ * Find the highest engagement tweet from MongoDB
+ */
+async function findHighestEngagementTweet() {
+  if (!db) return null;
+  const collection = db.collection('tweets');
+  return collection.find({})
+    .sort({ likes: -1, retweets: -1 })
+    .limit(1)
+    .toArray()
+    .then(tweets => tweets[0]);
+}
+
+/**
+ * Use Grok AI to generate a comment
+ */
+async function generateCommentWithGrok(tweetText) {
+  const payload = {
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are DONKEE, a highly intelligent, edgy, weed-smoking donkey who loves Solana memecoins and degen trading. Your tweets should be witty, playful, and target Gen Z and Millennials. Avoid direct financial advice or promotions."
+      },
+      {
+        "role": "user",
+        "content": `Comment on this tweet: "${tweetText}". Keep it playful and avoid financial advice.`
+      }
+    ],
+    "model": "grok-2-latest",
+    "stream": false,
+    "temperature": 0.7
+  };
+
+  try {
     const response = await axios.post('https://api.x.ai/v1/chat/completions', payload, {
       headers: {
         'Content-Type': 'application/json',
@@ -51,20 +107,31 @@ async function generateContentAndTweet() {
       },
       timeout: 180000 // 3 minutes timeout for API calls
     });
-
-    // Extract the generated text from the response
-    const generatedText = response.data.choices[0].message.content;
-    console.log('Generated Text:', generatedText);
-
-    // Post the tweet
-    await twitterClient.v2.tweet(generatedText + " #ForEntertainmentOnly #NotFinancialAdvice");
-    console.log('Tweet sent successfully!');
+    return response.data.choices[0].message.content;
   } catch (error) {
-    console.error('Error in content generation or tweeting:', error);
-    // Log error to file for persistent storage
-    fs.appendFile('error.log', `Error: ${JSON.stringify(error)}\n`, (err) => {
-      if (err) console.error('Error logging:', err);
-    });
+    console.error('Error generating comment with Grok:', error);
+    return "Oops, Donkee's too high to comment right now!";
+  }
+}
+
+/**
+ * Generate and post comment on the best tweet from the last 8 hours
+ */
+async function generateAndPostComment() {
+  const tweet = await findHighestEngagementTweet();
+  if (tweet) {
+    const comment = await generateCommentWithGrok(tweet.text);
+    console.log('Generated Comment:', comment);
+
+    // Post the reply
+    try {
+      await twitterClient.v2.reply(comment, tweet.id);
+      console.log('Reply sent successfully!');
+    } catch (error) {
+      console.error('Error posting reply:', error);
+    }
+  } else {
+    console.log('No tweet found to comment on.');
   }
 }
 
@@ -73,9 +140,19 @@ app.get('/', async (req, res) => {
   if (req.headers['x-api-key'] !== process.env.DONKEE_SECRET_KEY) {
     return res.status(401).send('Unauthorized');
   }
+  
   try {
-    await generateContentAndTweet();
-    res.status(200).send('OK'); // Minimal response
+    const now = new Date();
+    const minutes = now.getMinutes();
+    const hours = now.getHours();
+
+    if (minutes === 0 && hours % 2 === 0) { // Store tweets every 2 hours
+      await searchAndStoreTweets();
+    } else if (minutes === 0 && hours % 8 === 0) { // Comment every 8 hours
+      await generateAndPostComment();
+    }
+
+    res.status(200).send('OK');
   } catch (error) {
     console.error('Cron job failed:', error);
     res.status(500).send('Error');
