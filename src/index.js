@@ -307,7 +307,7 @@ app.get('/search', async (req, res) => {
     res.status(200).send('Tweets searched and stored');
   } catch (error) {
     console.error('Search and store operation failed:', error);
-    res.status(500).send    'Error in search and store operation');
+    res.status(500).send('Error in search and store operation');
   }
 });
 
