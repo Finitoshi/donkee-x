@@ -8,17 +8,19 @@ const app = express();
 // Initialize Twitter client for OAuth 2.0 (for both reading and writing operations)
 const twitterClientOAuth2 = new TwitterApi(process.env.BEARER_TOKEN);
 
-// Rate limiting to prevent abuse
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // Limit each IP to 1 request per windowMs due to free tier limits
+  max: 10, // Limit each IP to 10 requests per windowMs
   message: "Too many requests from this IP, please try again later.",
   handler: (req, res, next, options) => {
-    console.log(`Rate limit exceeded for IP: ${req.ip}`);
-    res.status(options.statusCode).send(options.message);
+    if (req.ip === '::1' || req.ip === '127.0.0.1') {
+      next();
+    } else {
+      console.log(`Rate limit exceeded for IP: ${req.ip}`);
+      res.status(options.statusCode).send(options.message);
+    }
   }
 });
-app.use(limiter);
 
 // Check for required environment variables
 const requiredEnvVars = ['BEARER_TOKEN', 'GROK_API_KEY', 'MONGODB_URL', 'DONKEE_SECRET_KEY'];
