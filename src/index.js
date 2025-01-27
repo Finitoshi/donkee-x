@@ -8,10 +8,10 @@ const app = express();
 // Initialize Twitter clients
 const twitterClientRead = new TwitterApi(process.env.BEARER_TOKEN); // For reading public data
 const twitterClientWrite = new TwitterApi({
-  appKey: process.env.APP_KEY,
-  appSecret: process.env.APP_SECRET,
+  appKey: process.env.API_KEY,
+  appSecret: process.env.API_KEY_SECRET,
   accessToken: process.env.ACCESS_TOKEN,
-  accessSecret: process.env.ACCESS_SECRET,
+  accessSecret: process.env.ACCESS_TOKEN_SECRET,
 }); // For writing (tweeting, replying)
 
 // Rate limiting to prevent abuse
@@ -33,7 +33,7 @@ app.use(limiter);
 // Check for required environment variables
 const requiredEnvVars = [
   'BEARER_TOKEN', 'GROK_API_KEY', 'MONGODB_URL', 'DONKEE_SECRET_KEY',
-  'APP_KEY', 'APP_SECRET', 'ACCESS_TOKEN', 'ACCESS_SECRET'
+  'API_KEY', 'API_KEY_SECRET', 'ACCESS_TOKEN', 'ACCESS_TOKEN_SECRET'
 ];
 requiredEnvVars.forEach(envVar => {
   if (!process.env[envVar]) {
@@ -126,6 +126,7 @@ async function storeTweet(tweet) {
   
   const tweetData = {
     tweet_id: tweet.id,
+    text tweet_id: tweet.id,
     text: tweet.text,
     likes: tweet.public_metrics?.like_count || 0,
     retweets: tweet.public_metrics?.retweet_count || 0,
