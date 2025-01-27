@@ -5,12 +5,18 @@ const rateLimit = require('express-rate-limit');
 const { MongoClient } = require('mongodb');
 const app = express();
 
-// Initialize Twitter client using environment variables for security
-const twitterClient = new TwitterApi({
+// Initialize Twitter client for OAuth 1.0a (for actual API calls after authorization)
+const twitterClientOAuth1 = new TwitterApi({
   appKey: process.env.API_KEY,
   appSecret: process.env.API_KEY_SECRET,
   accessToken: process.env.ACCESS_TOKEN,
   accessSecret: process.env.ACCESS_TOKEN_SECRET,
+});
+
+// Initialize Twitter client for OAuth 2.0 (for initial authorization)
+const twitterClientOAuth2 = new TwitterApi({
+  clientId: process.env.CLIENT_ID,
+  clientSecret: process.env.CLIENT_SECRET,
 });
 
 // Rate limiting to prevent abuse
@@ -18,15 +24,15 @@ const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 10, // Limit each IP to 10 requests per windowMs
   message: "Too many requests from this IP, please try again later.",
-  onLimitReached: (req, res, next) => {
+  handler: (req, res, next, options) => {
     console.log(`Rate limit exceeded for IP: ${req.ip}`);
-    next();
+    res.status(options.statusCode).send(options.message);
   }
 });
 app.use(limiter);
 
 // Check for required environment variables
-const requiredEnvVars = ['API_KEY', 'API_KEY_SECRET', 'ACCESS_TOKEN', 'ACCESS_TOKEN_SECRET', 'GROK_API_KEY', 'MONGODB_URL', 'DONKEE_SECRET_KEY'];
+const requiredEnvVars = ['API_KEY', 'API_KEY_SECRET', 'ACCESS_TOKEN', 'ACCESS_TOKEN_SECRET', 'GROK_API_KEY', 'MONGODB_URL', 'DONKEE_SECRET_KEY', 'CLIENT_ID', 'CLIENT_SECRET', 'REDIRECT_URI'];
 requiredEnvVars.forEach(envVar => {
   if (!process.env[envVar]) {
     console.error(`Missing environment variable: ${envVar}`);
@@ -140,7 +146,7 @@ async function storeTweet(tweet) {
 async function searchAndStoreTweets() {
   try {
     const query = '#sol OR #solana OR #memecoins OR #memes OR #crypto OR #100x lang:en -is:retweet';
-    const searchResult = await twitterClient.v2.search(query, { max_results: 100 });
+    const searchResult = await twitterClientOAuth1.v2.search(query, { max_results: 100 });
 
     if (searchResult.data && Array.isArray(searchResult.data)) {
       for (const tweet of searchResult.data) {
@@ -162,7 +168,7 @@ async function searchAndStoreTweets() {
       let retryCount = 0;
       while (retryCount < maxRetries) {
         try {
-          const listTweets = await twitterClient.v2.listTweets(listId, { max_results: 100 });
+          const listTweets = await twitterClientOAuth1.v2.listTweets(listId, { max_results: 100 });
 
           if (listTweets.data && Array.isArray(listTweets.data)) {
             for (const tweet of listTweets.data) {
@@ -293,8 +299,8 @@ async function generateAndPostComment() {
       const comment = await generateCommentWithGrok(tweet.text);
       console.log('Generated Comment:', comment);
 
-      // Post the reply
-      await twitterClient.v2.reply(comment, tweet.tweet_id);
+      // Post the reply using OAuth 1.0a
+      await twitterClientOAuth1.v2.reply(comment, tweet.tweet_id);
       console.log('Reply sent successfully!');
     } else {
       console.log('No tweet found to comment on.');
@@ -304,6 +310,18 @@ async function generateAndPostComment() {
     throw error;
   }
 }
+
+/**
+ * New Endpoint for initiating OAuth 2.0 Authorization
+ */
+app.get('/authorize', (req, res) => {
+  const authorizeUrl = twitterClientOAuth2.generateAuthURL({
+    scope: ["tweet.read", "tweet.write", "users.read"],
+    redirect_uri: process.env.REDIRECT_URI
+  });
+
+  res.send(`Please visit this URL to authorize: ${authorizeUrl}`);
+});
 
 // Endpoint for health check
 app.get('/health', (req, res) => {
@@ -335,7 +353,7 @@ app.get('/tweet', async (req, res) => {
   
   try {
     const newTweetText = await generateNewTweet();
-    await twitterClient.v2.tweet(newTweetText + " #ForEntertainmentOnly #NotFinancialAdvice");
+    await twitterClientOAuth1.v2.tweet(newTweetText + " #ForEntertainmentOnly #NotFinancialAdvice");
     console.log('New tweet posted:', newTweetText);
     res.status(200).send('New tweet posted');
   } catch (error) {
