@@ -7,22 +7,26 @@ const app = express();
 
 // Initialize Twitter client using environment variables for security
 const twitterClient = new TwitterApi({
-  appKey: process.env.APP_KEY,
-  appSecret: process.env.APP_SECRET,
+  appKey: process.env.API_KEY,
+  appSecret: process.env.API_KEY_SECRET,
   accessToken: process.env.ACCESS_TOKEN,
-  accessSecret: process.env.ACCESS_SECRET,
+  accessSecret: process.env.ACCESS_TOKEN_SECRET,
 });
 
 // Rate limiting to prevent abuse
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 10, // Limit each IP to 10 requests per windowMs
-  message: "Too many requests from this IP, please try again later."
+  message: "Too many requests from this IP, please try again later.",
+  onLimitReached: (req, res, next) => {
+    console.log(`Rate limit exceeded for IP: ${req.ip}`);
+    next();
+  }
 });
 app.use(limiter);
 
 // Check for required environment variables
-const requiredEnvVars = ['APP_KEY', 'APP_SECRET', 'ACCESS_TOKEN', 'ACCESS_SECRET', 'GROK_API_KEY', 'MONGODB_URL', 'DONKEE_SECRET_KEY'];
+const requiredEnvVars = ['API_KEY', 'API_KEY_SECRET', 'ACCESS_TOKEN', 'ACCESS_TOKEN_SECRET', 'GROK_API_KEY', 'MONGODB_URL', 'DONKEE_SECRET_KEY'];
 requiredEnvVars.forEach(envVar => {
   if (!process.env[envVar]) {
     console.error(`Missing environment variable: ${envVar}`);
@@ -62,6 +66,7 @@ async function setupTweetCollection() {
     await collection.createIndex({ "timestamp": 1 }, { background: true });
     await collection.createIndex({ "hashtags": 1 }, { background: true });
     await collection.createIndex({ "likes": -1, "retweets": -1 }, { background: true });
+    console.log('Indexes created successfully for tweets collection');
   } catch (error) {
     console.error('Error creating indexes:', error);
     throw error;
@@ -114,17 +119,17 @@ async function storeTweet(tweet) {
   const tweetData = {
     tweet_id: tweet.id,
     text: tweet.text,
-    likes: tweet.public_metrics.like_count,
-    retweets: tweet.public_metrics.retweet_count,
+    likes: tweet.public_metrics?.like_count || 0,
+    retweets: tweet.public_metrics?.retweet_count || 0,
     timestamp: new Date(tweet.created_at),
-    hashtags: tweet.entities && tweet.entities.hashtags ? tweet.entities.hashtags.map(h => h.tag) : []
+    hashtags: tweet.entities?.hashtags?.map(h => h.tag) || []
   };
 
   try {
     await collection.insertOne(tweetData);
     console.log('Tweet stored in MongoDB:', tweet.id);
   } catch (error) {
-    console.error('Error storing tweet:', error);
+    console.error('Error storing tweet:', error, 'Tweet data:', JSON.stringify(tweetData));
     throw error;
   }
 }
@@ -174,7 +179,7 @@ async function searchAndStoreTweets() {
           if (listError.code === 429) {
             const resetTime = listError.rateLimit.reset * 1000; // Convert to milliseconds
             const waitTime = Math.max(0, resetTime - Date.now());
-            console.log(`Rate limit reached. Waiting ${waitTime}ms before next attempt.`);
+            console.log(`Rate limit reached for list ${listId}. Waiting ${waitTime}ms before next attempt.`);
             await new Promise(resolve => setTimeout(resolve, waitTime));
             retryCount++;
           } else {
@@ -308,6 +313,7 @@ app.get('/health', (req, res) => {
 // Endpoint for searching and storing tweets
 app.get('/search', async (req, res) => {
   if (req.headers['x-api-key'] !== process.env.DONKEE_SECRET_KEY) {
+    console.log('Unauthorized access attempt for /search endpoint');
     return res.status(401).send('Unauthorized');
   }
   
@@ -323,6 +329,7 @@ app.get('/search', async (req, res) => {
 // Endpoint for posting a new tweet
 app.get('/tweet', async (req, res) => {
   if (req.headers['x-api-key'] !== process.env.DONKEE_SECRET_KEY) {
+    console.log('Unauthorized access attempt for /tweet endpoint');
     return res.status(401).send('Unauthorized');
   }
   
@@ -340,6 +347,7 @@ app.get('/tweet', async (req, res) => {
 // Endpoint for replying to the best tweet
 app.get('/reply', async (req, res) => {
   if (req.headers['x-api-key'] !== process.env.DONKEE_SECRET_KEY) {
+    console.log('Unauthorized access attempt for /reply endpoint');
     return res.status(401).send('Unauthorized');
   }
   
