@@ -126,7 +126,6 @@ async function storeTweet(tweet) {
   
   const tweetData = {
     tweet_id: tweet.id,
-    text: tweet.id,
     text: tweet.text,
     likes: tweet.public_metrics?.like_count || 0,
     retweets: tweet.public_metrics?.retweet_count || 0,
@@ -322,16 +321,86 @@ app.get('/tweet', async (req, res) => {
     console.log('Unauthorized access attempt for /tweet endpoint');
     return res.status(401).send('Unauthorized');
   }
-  
+
   try {
+    // 1. Generate base content
     const newTweetText = await generateNewTweet();
-    // Note: With the free tier, you're limited to 17 tweets per 24 hours
-    await twitterClientWrite.v2.tweet(newTweetText + " #ForEntertainmentOnly #NotFinancialAdvice");
-    console.log('New tweet posted:', newTweetText);
-    res.status(200).send('New tweet posted');
+    let finalTweet = `${newTweetText} #ForEntertainmentOnly #NotFinancialAdvice`;
+
+    // 2. Content validation
+    if (!finalTweet || finalTweet.trim().length < 10) {
+      console.error('Invalid tweet content');
+      return res.status(400).json({ error: 'Generated content too short' });
+    }
+
+    // 3. Length handling with smart truncation
+    if (finalTweet.length > 280) {
+      console.log(`Truncating tweet from ${finalTweet.length} characters`);
+      finalTweet = finalTweet.substring(0, 276) + '...';
+    }
+
+    // 4. Rate limit check using MongoDB
+    const rateLimitCollection = db.collection('rateLimits');
+    const limitDoc = await rateLimitCollection.findOne({ _id: 'dailyTweets' });
+    const currentCount = limitDoc?.count || 0;
+
+    if (currentCount >= 17) { // Free tier limit
+      console.error('Daily tweet limit reached');
+      return res.status(429).json({ 
+        error: 'Daily tweet limit exhausted',
+        reset: limitDoc?.resetTime 
+      });
+    }
+
+    // 5. Post tweet
+    const postedTweet = await twitterClientWrite.v2.tweet(finalTweet);
+    
+    // 6. Update rate limit tracking
+    const resetTime = new Date();
+    resetTime.setHours(24, 0, 0, 0); // Reset at midnight UTC
+    await rateLimitCollection.updateOne(
+      { _id: 'dailyTweets' },
+      { 
+        $inc: { count: 1 },
+        $setOnInsert: { resetTime }
+      },
+      { upsert: true }
+    );
+
+    // 7. Store the posted tweet in MongoDB
+    await db.collection('postedTweets').insertOne({
+      tweet_id: postedTweet.data.id,
+      text: finalTweet,
+      timestamp: new Date(),
+      api_response: postedTweet
+    });
+
+    console.log(`Tweet posted: ${finalTweet}`);
+    res.status(200).json({
+      success: true,
+      tweetId: postedTweet.data.id,
+      remaining: 17 - (currentCount + 1)
+    });
+
   } catch (error) {
     console.error('Tweet posting failed:', error);
-    res.status(500).send('Error posting tweet');
+    
+    // Special handling for common Twitter API errors
+    let errorMessage = 'Error posting tweet';
+    let statusCode = 500;
+
+    if (error.code === 403) {
+      errorMessage = 'Insufficient permissions (check app settings)';
+      statusCode = 403;
+    } else if (error.code === 401) {
+      errorMessage = 'Invalid authentication credentials';
+      statusCode = 401;
+    }
+
+    res.status(statusCode).json({
+      error: errorMessage,
+      details: error.data?.detail || error.message
+    });
   }
 });
 
