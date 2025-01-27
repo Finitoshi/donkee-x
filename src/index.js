@@ -11,7 +11,7 @@ const twitterClientOAuth2 = new TwitterApi(process.env.BEARER_TOKEN);
 // Rate limiting to prevent abuse
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 2, // Limit each IP to 1 request per windowMs due to free tier limits
+  max: 5, // Limit each IP to 1 request per windowMs due to free tier limits
   message: "Too many requests from this IP, please try again later.",
   handler: (req, res, next, options) => {
     console.log(`Rate limit exceeded for IP: ${req.ip}`);
