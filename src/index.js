@@ -126,7 +126,7 @@ async function storeTweet(tweet) {
   
   const tweetData = {
     tweet_id: tweet.id,
-    text tweet_id: tweet.id,
+    text: tweet.id,
     text: tweet.text,
     likes: tweet.public_metrics?.like_count || 0,
     retweets: tweet.public_metrics?.retweet_count || 0,
