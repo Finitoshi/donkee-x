@@ -5,24 +5,13 @@ const rateLimit = require('express-rate-limit');
 const { MongoClient } = require('mongodb');
 const app = express();
 
-// Initialize Twitter client for OAuth 1.0a (for actual API calls after authorization)
-const twitterClientOAuth1 = new TwitterApi({
-  appKey: process.env.API_KEY,
-  appSecret: process.env.API_KEY_SECRET,
-  accessToken: process.env.ACCESS_TOKEN,
-  accessSecret: process.env.ACCESS_TOKEN_SECRET,
-});
-
-// Initialize Twitter client for OAuth 2.0 (for initial authorization)
-const twitterClientOAuth2 = new TwitterApi({
-  clientId: process.env.CLIENT_ID,
-  clientSecret: process.env.CLIENT_SECRET,
-});
+// Initialize Twitter client for OAuth 2.0 (for both reading and writing operations)
+const twitterClientOAuth2 = new TwitterApi(process.env.BEARER_TOKEN);
 
 // Rate limiting to prevent abuse
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10, // Limit each IP to 10 requests per windowMs
+  max: 1, // Limit each IP to 1 request per windowMs due to free tier limits
   message: "Too many requests from this IP, please try again later.",
   handler: (req, res, next, options) => {
     console.log(`Rate limit exceeded for IP: ${req.ip}`);
@@ -32,7 +21,7 @@ const limiter = rateLimit({
 app.use(limiter);
 
 // Check for required environment variables
-const requiredEnvVars = ['API_KEY', 'API_KEY_SECRET', 'ACCESS_TOKEN', 'ACCESS_TOKEN_SECRET', 'GROK_API_KEY', 'MONGODB_URL', 'DONKEE_SECRET_KEY', 'CLIENT_ID', 'CLIENT_SECRET', 'REDIRECT_URI'];
+const requiredEnvVars = ['BEARER_TOKEN', 'GROK_API_KEY', 'MONGODB_URL', 'DONKEE_SECRET_KEY'];
 requiredEnvVars.forEach(envVar => {
   if (!process.env[envVar]) {
     console.error(`Missing environment variable: ${envVar}`);
@@ -146,7 +135,7 @@ async function storeTweet(tweet) {
 async function searchAndStoreTweets() {
   try {
     const query = '#sol OR #solana OR #memecoins OR #memes OR #crypto OR #100x lang:en -is:retweet';
-    const searchResult = await twitterClientOAuth1.v2.search(query, { max_results: 100 });
+    const searchResult = await twitterClientOAuth2.v2.search(query, { max_results: 100 });
 
     if (searchResult.data && Array.isArray(searchResult.data)) {
       for (const tweet of searchResult.data) {
@@ -162,41 +151,22 @@ async function searchAndStoreTweets() {
       '1587987762908651520', '1726621096902807989', '1777037601578287430', 
       '1747955009617006656', '1818599454951588008'
     ];
-    const maxRetries = 5;
-
+    // Note: With the free tier, you can only make 1 request every 15 minutes for each operation
     for (let listId of listIds) {
-      let retryCount = 0;
-      while (retryCount < maxRetries) {
-        try {
-          const listTweets = await twitterClientOAuth1.v2.listTweets(listId, { max_results: 100 });
+      try {
+        const listTweets = await twitterClientOAuth2.v2.listTweets(listId, { max_results: 100 });
 
-          if (listTweets.data && Array.isArray(listTweets.data)) {
-            for (const tweet of listTweets.data) {
-              await storeTweet(tweet);
-            }
-            console.log(`Tweets from list ${listId} stored in MongoDB.`);
-            break; // Success, move to next list
-          } else {
-            console.log(`No tweets found from list ${listId}`);
-            break; // No need to retry if no data, but no error either
+        if (listTweets.data && Array.isArray(listTweets.data)) {
+          for (const tweet of listTweets.data) {
+            await storeTweet(tweet);
           }
-        } catch (listError) {
-          console.error(`Error fetching tweets from list ${listId}:`, listError);
-          if (listError.code === 429) {
-            const resetTime = listError.rateLimit.reset * 1000; // Convert to milliseconds
-            const waitTime = Math.max(0, resetTime - Date.now());
-            console.log(`Rate limit reached for list ${listId}. Waiting ${waitTime}ms before next attempt.`);
-            await new Promise(resolve => setTimeout(resolve, waitTime));
-            retryCount++;
-          } else {
-            // For other errors, stop retrying for this list
-            console.error(`Non-rate limit error from list ${listId}. Moving to next list.`);
-            break;
-          }
+          console.log(`Tweets from list ${listId} stored in MongoDB.`);
+        } else {
+          console.log(`No tweets found from list ${listId}`);
         }
-      }
-      if (retryCount >= maxRetries) {
-        console.error(`Max retries reached for list ${listId}. Moving to next list.`);
+      } catch (listError) {
+        console.error(`Error fetching tweets from list ${listId}:`, listError);
+        // We do not implement retrying here because of the severe rate limits on the free tier
       }
     }
   } catch (error) {
@@ -299,8 +269,8 @@ async function generateAndPostComment() {
       const comment = await generateCommentWithGrok(tweet.text);
       console.log('Generated Comment:', comment);
 
-      // Post the reply using OAuth 1.0a
-      await twitterClientOAuth1.v2.reply(comment, tweet.tweet_id);
+      // Post the reply using OAuth 2.0 - Note: We're limited to 17 posts per day
+      await twitterClientOAuth2.v2.reply(comment, tweet.tweet_id);
       console.log('Reply sent successfully!');
     } else {
       console.log('No tweet found to comment on.');
@@ -312,15 +282,12 @@ async function generateAndPostComment() {
 }
 
 /**
- * New Endpoint for initiating OAuth 2.0 Authorization
+ * Endpoint for initiating OAuth 2.0 Authorization
+ * This is not used in the free tier but kept for reference
  */
 app.get('/authorize', (req, res) => {
-  const authorizeUrl = twitterClientOAuth2.generateAuthURL({
-    scope: ["tweet.read", "tweet.write", "users.read"],
-    redirect_uri: process.env.REDIRECT_URI
-  });
-
-  res.send(`Please visit this URL to authorize: ${authorizeUrl}`);
+  // Since we're using Bearer token for free tier, this isn't needed for regular operations
+  res.send('OAuth 2.0 authorization not required for free tier operations.');
 });
 
 // Endpoint for health check
@@ -340,7 +307,7 @@ app.get('/search', async (req, res) => {
     res.status(200).send('Tweets searched and stored');
   } catch (error) {
     console.error('Search and store operation failed:', error);
-    res.status(500).send('Error in search and store operation');
+    res.status(500).send    'Error in search and store operation');
   }
 });
 
@@ -353,7 +320,8 @@ app.get('/tweet', async (req, res) => {
   
   try {
     const newTweetText = await generateNewTweet();
-    await twitterClientOAuth1.v2.tweet(newTweetText + " #ForEntertainmentOnly #NotFinancialAdvice");
+    // Note: With the free tier, you're limited to 17 tweets per 24 hours
+    await twitterClientOAuth2.v2.tweet(newTweetText + " #ForEntertainmentOnly #NotFinancialAdvice");
     console.log('New tweet posted:', newTweetText);
     res.status(200).send('New tweet posted');
   } catch (error) {
@@ -370,6 +338,7 @@ app.get('/reply', async (req, res) => {
   }
   
   try {
+    // With the free tier, each reply counts towards your 17 tweets per day
     await generateAndPostComment();
     res.status(200).send('Comment posted');
   } catch (error) {
